@@ -1,37 +1,6 @@
 <HTML>
   <head>
-<script src="https://cdn.jsdelivr.net/npm/zstd-codec@0.1.5/lib/zstd-codec.min.js"></script>
 
-<script>
-var textBox = document.getElementById("stringInput");
-const input = textBox.value;
-
-function decode() {
-  ZstdCodec.run(zstd => {
-    const simple = new zstd.Simple();
-
-    // Step 1: Base64 decode
-    const binaryString = atob(input);
-    const compressed = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-
-    // Step 2: Decompress
-    const decompressed = simple.decompress(compressed);
-
-    // Step 3: Convert bytes to text
-    const text = new TextDecoder().decode(decompressed);
-
-    // Step 4: Parse outer JSON
-    const table = JSON.parse(text);
-
-    // Step 5: Parse nested DATA field
-    table.forEach(item => {
-        item.DATA = JSON.parse(item.DATA);
-    });
-
-    console.log(table);
-});
-}
-</script>
   </head>
   <body>
     <input id="stringInput"></input>
