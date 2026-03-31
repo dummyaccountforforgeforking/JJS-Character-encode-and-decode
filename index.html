@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Base64 Zstd Lua Table Editor</title>
+<title>Base64 Compressed Lua Table Editor</title>
 <style>
     body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: auto; }
     textarea { width: 100%; height: 150px; margin-bottom: 10px; font-family: monospace; }
@@ -12,7 +12,7 @@
 </head>
 <body>
 
-<h2>Base64 Zstd Lua Table Editor</h2>
+<h2>Base64 Compressed Lua Table Editor (fflate)</h2>
 
 <label for="inputArea">Input Base64 String:</label>
 <textarea id="inputArea" placeholder="Paste Base64 here..."></textarea>
@@ -25,68 +25,59 @@
 <label for="outputArea">Output:</label>
 <pre id="outputArea"></pre>
 
-<!-- Browser-ready Zstd library via jsDelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@hiogawa/zstd-codec-wasm@1.5.2/dist/zstd.min.js"></script>
+<!-- Include fflate library -->
+<script src="https://cdn.jsdelivr.net/npm/fflate@0.7.4/umd/index.js"></script>
 
 <script>
 let currentTable = null;
 
-// Wait for Zstd WASM to load
-Zstd.ready.then(() => {
-    const simple = new Zstd.Simple();
+const inputArea = document.getElementById('inputArea');
+const outputArea = document.getElementById('outputArea');
+const decodeBtn = document.getElementById('decodeBtn');
+const encodeBtn = document.getElementById('encodeBtn');
 
-    const inputArea = document.getElementById('inputArea');
-    const outputArea = document.getElementById('outputArea');
-    const decodeBtn = document.getElementById('decodeBtn');
-    const encodeBtn = document.getElementById('encodeBtn');
+// Decode Base64 -> compressed bytes -> decompressed JSON
+decodeBtn.addEventListener('click', () => {
+    const input = inputArea.value.trim();
+    try {
+        const binary = atob(input);
+        const compressed = Uint8Array.from(binary, c => c.charCodeAt(0));
+        const decompressed = fflate.decompressSync(compressed);
+        const text = new TextDecoder().decode(decompressed);
+        const result = JSON.parse(text);
 
-    // Decode Base64 → Zstd → Lua JSON
-    decodeBtn.addEventListener('click', () => {
-        const input = inputArea.value.trim();
-        try {
-            const binary = atob(input);
-            const compressed = Uint8Array.from(binary, c => c.charCodeAt(0));
-            const decompressed = simple.decompress(compressed);
-            const text = new TextDecoder().decode(decompressed);
-            const result = JSON.parse(text);
+        result.forEach(item => item.DATA = JSON.parse(item.DATA));
 
-            result.forEach(item => item.DATA = JSON.parse(item.DATA));
+        currentTable = result;
+        outputArea.textContent = JSON.stringify(result, null, 2);
+    } catch (err) {
+        outputArea.textContent = 'Error decoding: ' + err;
+        currentTable = null;
+    }
+});
 
-            currentTable = result;
-            outputArea.textContent = JSON.stringify(result, null, 2);
-        } catch (err) {
-            outputArea.textContent = 'Error decoding: ' + err;
-            currentTable = null;
-        }
-    });
+// Encode JSON -> compressed bytes -> Base64
+encodeBtn.addEventListener('click', () => {
+    if (!currentTable) {
+        outputArea.textContent = 'No table to encode. Decode first!';
+        return;
+    }
+    try {
+        const copy = JSON.parse(JSON.stringify(currentTable));
+        copy.forEach(item => item.DATA = JSON.stringify(item.DATA));
 
-    // Encode Lua JSON → Zstd → Base64
-    encodeBtn.addEventListener('click', () => {
-        if (!currentTable) {
-            outputArea.textContent = 'No table to encode. Decode first!';
-            return;
-        }
-        try {
-            const copy = JSON.parse(JSON.stringify(currentTable));
-            copy.forEach(item => item.DATA = JSON.stringify(item.DATA));
+        const json = JSON.stringify(copy);
+        const bytes = new TextEncoder().encode(json);
+        const compressed = fflate.compressSync(bytes);
 
-            const json = JSON.stringify(copy);
-            const bytes = new TextEncoder().encode(json);
-            const compressed = simple.compress(bytes);
+        let binary = '';
+        compressed.forEach(b => binary += String.fromCharCode(b));
+        const base64 = btoa(binary);
 
-            let binary = '';
-            compressed.forEach(b => binary += String.fromCharCode(b));
-            const base64 = btoa(binary);
-
-            outputArea.textContent = base64;
-        } catch (err) {
-            outputArea.textContent = 'Error encoding: ' + err;
-        }
-    });
-
-}).catch(err => {
-    console.error('Failed to load Zstd WASM:', err);
-    document.getElementById('outputArea').textContent = 'Failed to load Zstd WASM: ' + err;
+        outputArea.textContent = base64;
+    } catch (err) {
+        outputArea.textContent = 'Error encoding: ' + err;
+    }
 });
 </script>
 
