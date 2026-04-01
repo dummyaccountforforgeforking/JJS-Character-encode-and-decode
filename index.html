@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Zstd Base64 Lua Table Tool</title>
+<title>Zstd Base64 Tool</title>
 <style>
 body {
     font-family: Arial, sans-serif;
@@ -13,7 +13,7 @@ body {
 
 textarea {
     width: 100%;
-    height: 180px;
+    height: 220px;
     font-family: monospace;
     margin-bottom: 15px;
 }
@@ -34,9 +34,9 @@ pre {
 </head>
 <body>
 
-<h2>Zstd Base64 Lua Table Decoder / Encoder</h2>
+<h2>Zstd Base64 Decoder / Encoder</h2>
 
-<label>Input Base64:</label>
+<label>Input:</label>
 <textarea id="input"></textarea>
 
 <div>
@@ -51,29 +51,23 @@ pre {
 
 <script>
 let zstdModule;
-let currentData = null;
 
-async function initZstd() {
+async function init() {
     zstdModule = await Zstd({
         locateFile: file => 'zstd/' + file
     });
+
     document.getElementById('output').textContent = 'Zstd loaded successfully.';
 }
 
 function base64ToBytes(base64) {
     const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
+    return Uint8Array.from(binary, c => c.charCodeAt(0));
 }
 
 function bytesToBase64(bytes) {
     let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
+    bytes.forEach(b => binary += String.fromCharCode(b));
     return btoa(binary);
 }
 
@@ -82,33 +76,28 @@ document.getElementById('decode').addEventListener('click', () => {
         const input = document.getElementById('input').value.trim();
         const compressed = base64ToBytes(input);
 
-        const decompressed = zstdModule._malloc(compressed.length);
-        zstdModule.HEAPU8.set(compressed, decompressed);
+        const inPtr = zstdModule._malloc(compressed.length);
+        zstdModule.HEAPU8.set(compressed, inPtr);
 
-        const outSize = 1000000;
-        const outputPtr = zstdModule._malloc(outSize);
+        const outSize = compressed.length * 20;
+        const outPtr = zstdModule._malloc(outSize);
 
         const resultSize = zstdModule._ZSTD_decompress(
-            outputPtr,
+            outPtr,
             outSize,
-            decompressed,
+            inPtr,
             compressed.length
         );
 
-        if (resultSize < 0) {
-            throw new Error("ZSTD decompression failed");
-        }
+        if (resultSize <= 0) throw new Error("Decompression failed");
 
-        const result = zstdModule.HEAPU8.slice(outputPtr, outputPtr + resultSize);
-
+        const result = zstdModule.HEAPU8.slice(outPtr, outPtr + resultSize);
         const text = new TextDecoder().decode(result);
-
-        currentData = text;
 
         document.getElementById('output').textContent = text;
 
-        zstdModule._free(decompressed);
-        zstdModule._free(outputPtr);
+        zstdModule._free(inPtr);
+        zstdModule._free(outPtr);
 
     } catch (err) {
         document.getElementById('output').textContent = 'Decode error: ' + err;
@@ -117,45 +106,39 @@ document.getElementById('decode').addEventListener('click', () => {
 
 document.getElementById('encode').addEventListener('click', () => {
     try {
-        if (!currentData) {
-            throw new Error("No decoded data available");
-        }
+        const input = document.getElementById('input').value;
+        const bytes = new TextEncoder().encode(input);
 
-        const inputBytes = new TextEncoder().encode(currentData);
+        const inPtr = zstdModule._malloc(bytes.length);
+        zstdModule.HEAPU8.set(bytes, inPtr);
 
-        const inputPtr = zstdModule._malloc(inputBytes.length);
-        zstdModule.HEAPU8.set(inputBytes, inputPtr);
+        const outSize = bytes.length * 2;
+        const outPtr = zstdModule._malloc(outSize);
 
-        const outSize = inputBytes.length * 2;
-        const outputPtr = zstdModule._malloc(outSize);
-
-        const compressedSize = zstdModule._ZSTD_compress(
-            outputPtr,
+        const resultSize = zstdModule._ZSTD_compress(
+            outPtr,
             outSize,
-            inputPtr,
-            inputBytes.length,
+            inPtr,
+            bytes.length,
             3
         );
 
-        if (compressedSize < 0) {
-            throw new Error("ZSTD compression failed");
-        }
+        if (resultSize <= 0) throw new Error("Compression failed");
 
-        const compressed = zstdModule.HEAPU8.slice(outputPtr, outputPtr + compressedSize);
-
+        const compressed = zstdModule.HEAPU8.slice(outPtr, outPtr + resultSize);
         const base64 = bytesToBase64(compressed);
 
         document.getElementById('output').textContent = base64;
 
-        zstdModule._free(inputPtr);
-        zstdModule._free(outputPtr);
+        zstdModule._free(inPtr);
+        zstdModule._free(outPtr);
 
     } catch (err) {
         document.getElementById('output').textContent = 'Encode error: ' + err;
     }
 });
 
-initZstd();
+init();
 </script>
 
 </body>
