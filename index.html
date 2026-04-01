@@ -2,24 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Zstd Base64 Tool</title>
+<title>Zstd Lua Table Editor</title>
 <style>
 body {
     font-family: Arial, sans-serif;
-    max-width: 900px;
+    max-width: 1000px;
     margin: 30px auto;
     padding: 20px;
 }
 
 textarea {
     width: 100%;
-    height: 220px;
     font-family: monospace;
     margin-bottom: 15px;
 }
 
+#input { height: 120px; }
+#editor { height: 300px; }
+
 button {
-    padding: 10px 18px;
+    padding: 8px 14px;
     margin-right: 10px;
     cursor: pointer;
 }
@@ -34,17 +36,20 @@ pre {
 </head>
 <body>
 
-<h2>Zstd Base64 Decoder / Encoder</h2>
+<h2>Zstd Lua Table Editor</h2>
 
-<label>Input:</label>
+<label>Compressed Base64 Input:</label>
 <textarea id="input"></textarea>
 
 <div>
-    <button id="decode">Decode</button>
-    <button id="encode">Encode</button>
+    <button id="decode">Decode → Edit</button>
+    <button id="encode">Encode Edited Table</button>
 </div>
 
-<h3>Output:</h3>
+<label>Editable Lua Table:</label>
+<textarea id="editor"></textarea>
+
+<h3>Encoded Output:</h3>
 <pre id="output"></pre>
 
 <script src="zstd/zstd.js"></script>
@@ -52,11 +57,13 @@ pre {
 <script>
 let zstdModule;
 
+// -------------------------
+// Zstd Helpers
+// -------------------------
 async function init() {
     zstdModule = await Zstd({
         locateFile: file => 'zstd/' + file
     });
-
     document.getElementById('output').textContent = 'Zstd loaded successfully.';
 }
 
@@ -71,34 +78,80 @@ function bytesToBase64(bytes) {
     return btoa(binary);
 }
 
+function decompressBase64(base64) {
+    const compressed = base64ToBytes(base64);
+    const inPtr = zstdModule._malloc(compressed.length);
+    zstdModule.HEAPU8.set(compressed, inPtr);
+
+    const outSize = compressed.length * 20;
+    const outPtr = zstdModule._malloc(outSize);
+
+    const resultSize = zstdModule._ZSTD_decompress(outPtr, outSize, inPtr, compressed.length);
+    if (resultSize <= 0) throw new Error("Decompression failed");
+
+    const result = zstdModule.HEAPU8.slice(outPtr, outPtr + resultSize);
+    const text = new TextDecoder().decode(result);
+
+    zstdModule._free(inPtr);
+    zstdModule._free(outPtr);
+    return text;
+}
+
+function compressToBase64(text) {
+    const bytes = new TextEncoder().encode(text);
+    const inPtr = zstdModule._malloc(bytes.length);
+    zstdModule.HEAPU8.set(bytes, inPtr);
+
+    const outSize = bytes.length * 2;
+    const outPtr = zstdModule._malloc(outSize);
+
+    const resultSize = zstdModule._ZSTD_compress(outPtr, outSize, inPtr, bytes.length, 3);
+    if (resultSize <= 0) throw new Error("Compression failed");
+
+    const compressed = zstdModule.HEAPU8.slice(outPtr, outPtr + resultSize);
+    const base64 = bytesToBase64(compressed);
+
+    zstdModule._free(inPtr);
+    zstdModule._free(outPtr);
+    return base64;
+}
+
+// -------------------------
+// Minimal Lua Table Parser
+// -------------------------
+// Supports simple {key=value, key2={...}} tables
+// Strings with "" or '' are supported
+function parseLuaTable(str) {
+    // Replace Lua-style syntax for easier eval: {key=value} -> {key:"value"}
+    let s = str.replace(/(\w+)\s*=/g, '"$1":');
+    s = s.replace(/'/g, '"');  // single quotes -> double quotes
+    return JSON.parse(s);
+}
+
+function stringifyLuaTable(obj, indent=0) {
+    const pad = '  '.repeat(indent);
+    if (typeof obj === 'object' && !Array.isArray(obj)) {
+        let entries = Object.entries(obj).map(([k,v]) => `${k}=${stringifyLuaTable(v, indent+1)}`);
+        return '{\n' + pad + entries.join(',\n' + pad) + '\n' + '  '.repeat(indent-1) + '}';
+    } else if (Array.isArray(obj)) {
+        let arr = obj.map(v => stringifyLuaTable(v, indent+1));
+        return '{' + arr.join(',') + '}';
+    } else if (typeof obj === 'string') {
+        return `"${obj}"`;
+    } else {
+        return String(obj);
+    }
+}
+
+// -------------------------
+// Event Handlers
+// -------------------------
 document.getElementById('decode').addEventListener('click', () => {
     try {
-        const input = document.getElementById('input').value.trim();
-        const compressed = base64ToBytes(input);
-
-        const inPtr = zstdModule._malloc(compressed.length);
-        zstdModule.HEAPU8.set(compressed, inPtr);
-
-        const outSize = compressed.length * 20;
-        const outPtr = zstdModule._malloc(outSize);
-
-        const resultSize = zstdModule._ZSTD_decompress(
-            outPtr,
-            outSize,
-            inPtr,
-            compressed.length
-        );
-
-        if (resultSize <= 0) throw new Error("Decompression failed");
-
-        const result = zstdModule.HEAPU8.slice(outPtr, outPtr + resultSize);
-        const text = new TextDecoder().decode(result);
-
-        document.getElementById('output').textContent = text;
-
-        zstdModule._free(inPtr);
-        zstdModule._free(outPtr);
-
+        const base64 = document.getElementById('input').value.trim();
+        const luaText = decompressBase64(base64);
+        document.getElementById('editor').value = luaText;
+        document.getElementById('output').textContent = 'Decoded successfully.';
     } catch (err) {
         document.getElementById('output').textContent = 'Decode error: ' + err;
     }
@@ -106,33 +159,9 @@ document.getElementById('decode').addEventListener('click', () => {
 
 document.getElementById('encode').addEventListener('click', () => {
     try {
-        const input = document.getElementById('input').value;
-        const bytes = new TextEncoder().encode(input);
-
-        const inPtr = zstdModule._malloc(bytes.length);
-        zstdModule.HEAPU8.set(bytes, inPtr);
-
-        const outSize = bytes.length * 2;
-        const outPtr = zstdModule._malloc(outSize);
-
-        const resultSize = zstdModule._ZSTD_compress(
-            outPtr,
-            outSize,
-            inPtr,
-            bytes.length,
-            3
-        );
-
-        if (resultSize <= 0) throw new Error("Compression failed");
-
-        const compressed = zstdModule.HEAPU8.slice(outPtr, outPtr + resultSize);
-        const base64 = bytesToBase64(compressed);
-
+        const editedText = document.getElementById('editor').value;
+        const base64 = compressToBase64(editedText);
         document.getElementById('output').textContent = base64;
-
-        zstdModule._free(inPtr);
-        zstdModule._free(outPtr);
-
     } catch (err) {
         document.getElementById('output').textContent = 'Encode error: ' + err;
     }
