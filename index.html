@@ -2,83 +2,160 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Base64 Compressed Lua Table Editor</title>
+<title>Zstd Base64 Lua Table Tool</title>
 <style>
-    body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: auto; }
-    textarea { width: 100%; height: 150px; margin-bottom: 10px; font-family: monospace; }
-    button { margin-right: 10px; padding: 10px 20px; font-size: 16px; }
-    pre { background: #f0f0f0; padding: 10px; white-space: pre-wrap; word-wrap: break-word; }
+body {
+    font-family: Arial, sans-serif;
+    max-width: 900px;
+    margin: 30px auto;
+    padding: 20px;
+}
+
+textarea {
+    width: 100%;
+    height: 180px;
+    font-family: monospace;
+    margin-bottom: 15px;
+}
+
+button {
+    padding: 10px 18px;
+    margin-right: 10px;
+    cursor: pointer;
+}
+
+pre {
+    background: #f3f3f3;
+    padding: 15px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
 </style>
 </head>
 <body>
 
-<h2>Base64 Compressed Lua Table Editor (fflate)</h2>
+<h2>Zstd Base64 Lua Table Decoder / Encoder</h2>
 
-<label for="inputArea">Input Base64 String:</label>
-<textarea id="inputArea" placeholder="Paste Base64 here..."></textarea>
+<label>Input Base64:</label>
+<textarea id="input"></textarea>
 
 <div>
-    <button id="decodeBtn">Decode</button>
-    <button id="encodeBtn">Encode</button>
+    <button id="decode">Decode</button>
+    <button id="encode">Encode</button>
 </div>
 
-<label for="outputArea">Output:</label>
-<pre id="outputArea"></pre>
+<h3>Output:</h3>
+<pre id="output"></pre>
 
-<!-- Include fflate library -->
-<script src="https://cdn.jsdelivr.net/npm/fflate@0.7.4/umd/index.js"></script>
+<script src="zstd/zstd.js"></script>
 
 <script>
-let currentTable = null;
+let zstdModule;
+let currentData = null;
 
-const inputArea = document.getElementById('inputArea');
-const outputArea = document.getElementById('outputArea');
-const decodeBtn = document.getElementById('decodeBtn');
-const encodeBtn = document.getElementById('encodeBtn');
+async function initZstd() {
+    zstdModule = await Zstd({
+        locateFile: file => 'zstd/' + file
+    });
+    document.getElementById('output').textContent = 'Zstd loaded successfully.';
+}
 
-// Decode Base64 -> compressed bytes -> decompressed JSON
-decodeBtn.addEventListener('click', () => {
-    const input = inputArea.value.trim();
+function base64ToBytes(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+}
+
+function bytesToBase64(bytes) {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+}
+
+document.getElementById('decode').addEventListener('click', () => {
     try {
-        const binary = atob(input);
-        const compressed = Uint8Array.from(binary, c => c.charCodeAt(0));
-        const decompressed = fflate.decompressSync(compressed);
-        const text = new TextDecoder().decode(decompressed);
-        const result = JSON.parse(text);
+        const input = document.getElementById('input').value.trim();
+        const compressed = base64ToBytes(input);
 
-        result.forEach(item => item.DATA = JSON.parse(item.DATA));
+        const decompressed = zstdModule._malloc(compressed.length);
+        zstdModule.HEAPU8.set(compressed, decompressed);
 
-        currentTable = result;
-        outputArea.textContent = JSON.stringify(result, null, 2);
+        const outSize = 1000000;
+        const outputPtr = zstdModule._malloc(outSize);
+
+        const resultSize = zstdModule._ZSTD_decompress(
+            outputPtr,
+            outSize,
+            decompressed,
+            compressed.length
+        );
+
+        if (resultSize < 0) {
+            throw new Error("ZSTD decompression failed");
+        }
+
+        const result = zstdModule.HEAPU8.slice(outputPtr, outputPtr + resultSize);
+
+        const text = new TextDecoder().decode(result);
+
+        currentData = text;
+
+        document.getElementById('output').textContent = text;
+
+        zstdModule._free(decompressed);
+        zstdModule._free(outputPtr);
+
     } catch (err) {
-        outputArea.textContent = 'Error decoding: ' + err;
-        currentTable = null;
+        document.getElementById('output').textContent = 'Decode error: ' + err;
     }
 });
 
-// Encode JSON -> compressed bytes -> Base64
-encodeBtn.addEventListener('click', () => {
-    if (!currentTable) {
-        outputArea.textContent = 'No table to encode. Decode first!';
-        return;
-    }
+document.getElementById('encode').addEventListener('click', () => {
     try {
-        const copy = JSON.parse(JSON.stringify(currentTable));
-        copy.forEach(item => item.DATA = JSON.stringify(item.DATA));
+        if (!currentData) {
+            throw new Error("No decoded data available");
+        }
 
-        const json = JSON.stringify(copy);
-        const bytes = new TextEncoder().encode(json);
-        const compressed = fflate.compressSync(bytes);
+        const inputBytes = new TextEncoder().encode(currentData);
 
-        let binary = '';
-        compressed.forEach(b => binary += String.fromCharCode(b));
-        const base64 = btoa(binary);
+        const inputPtr = zstdModule._malloc(inputBytes.length);
+        zstdModule.HEAPU8.set(inputBytes, inputPtr);
 
-        outputArea.textContent = base64;
+        const outSize = inputBytes.length * 2;
+        const outputPtr = zstdModule._malloc(outSize);
+
+        const compressedSize = zstdModule._ZSTD_compress(
+            outputPtr,
+            outSize,
+            inputPtr,
+            inputBytes.length,
+            3
+        );
+
+        if (compressedSize < 0) {
+            throw new Error("ZSTD compression failed");
+        }
+
+        const compressed = zstdModule.HEAPU8.slice(outputPtr, outputPtr + compressedSize);
+
+        const base64 = bytesToBase64(compressed);
+
+        document.getElementById('output').textContent = base64;
+
+        zstdModule._free(inputPtr);
+        zstdModule._free(outputPtr);
+
     } catch (err) {
-        outputArea.textContent = 'Error encoding: ' + err;
+        document.getElementById('output').textContent = 'Encode error: ' + err;
     }
 });
+
+initZstd();
 </script>
 
 </body>
